@@ -1,0 +1,406 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb,amsfonts,bm}
+\usepackage[margin=1in]{geometry}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Dynamic 3D Gaussian Splatting with Explicit Real-Valued ODE-Based 6DoF Gaussian Transformation}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Overview}
+
+We propose a dynamic 3D Gaussian Splatting framework that preserves the original 3DGS rendering pipeline while replacing neural deformation fields with explicit ordinary differential equations. Each primitive remains a standard 3D anisotropic Gaussian in world space, and rendering is still performed exactly as in the original 3DGS method: each 3D Gaussian is projected onto the image plane, converted into a 2D Gaussian footprint, depth-sorted, and rasterized by alpha compositing.
+
+The rendering backbone is unchanged. The proposed method does not introduce volumetric ray tracing, radiance-field integration, implicit neural warp fields, or MLP-based deformation modules. The only modification is the temporal parameterization of each Gaussian primitive.
+
+In this revised framework, the Gaussian is not updated by a simple 3D offset anymore. Instead, each Gaussian primitive is transformed by a time-dependent 6DoF rigid transformation. The 6DoF transformation contains both a 3D translation and a 3D rotation, allowing each Gaussian blob to move and rotate over time. Therefore, the dynamic Gaussian at time $\tau$ is obtained by applying a learned continuous-time transformation in $SE(3)$ to its canonical state.
+
+This formulation is more expressive than a pure offset model. A pure offset can only translate the Gaussian center, while the proposed 6DoF formulation can translate the center and rotate the anisotropic Gaussian ellipsoid. As a result, both the position and local orientation of each Gaussian primitive can evolve over time.
+
+\section{Dynamic 3D Gaussian Representation}
+
+Let the dynamic scene at normalized time $\tau$ be represented by a set of $N$ anisotropic Gaussian primitives
+\begin{equation}
+\mathcal{G}_{\tau}=\{G_i(\tau)\}_{i=1}^N,
+\end{equation}
+where primitive $i$ is defined as
+\begin{equation}
+G_i(\tau)=\bigl(\mu_i(\tau),\Sigma_i(\tau),\alpha_i,c_i\bigr).
+\end{equation}
+
+Here,
+\begin{itemize}[leftmargin=1.5em]
+\item $\mu_i(\tau)\in\mathbb{R}^3$ is the time-dependent Gaussian mean,
+\item $\Sigma_i(\tau)\in\mathbb{R}^{3\times 3}$ is the time-dependent covariance matrix,
+\item $\alpha_i\in[0,1]$ is the Gaussian opacity,
+\item $c_i$ denotes the appearance parameter, such as RGB color or spherical harmonics coefficients.
+\end{itemize}
+
+To isolate the effect of temporal geometry modeling, we focus on the time evolution of the Gaussian geometry. In the simplest setting, $\alpha_i$ and $c_i$ are kept fixed over time and handled exactly as in standard 3DGS.
+
+We normalize the original timestamp $t$ into a bounded temporal coordinate $\tau\in[-1,1]$:
+\begin{equation}
+\tau = 2\frac{t-t_{\min}}{t_{\max}-t_{\min}}-1.
+\end{equation}
+
+\section{Canonical Gaussian State}
+
+For each Gaussian primitive $i$, we define a canonical state at the reference time $\tau=0$:
+\begin{equation}
+G_i^0=\bigl(\mu_i^0,\Sigma_i^0,\alpha_i,c_i\bigr),
+\end{equation}
+where
+\begin{itemize}[leftmargin=1.5em]
+\item $\mu_i^0\in\mathbb{R}^3$ is the canonical mean,
+\item $\Sigma_i^0\in\mathbb{R}^{3\times 3}$ is the canonical covariance,
+\item $\alpha_i$ is the opacity,
+\item $c_i$ is the appearance parameter.
+\end{itemize}
+
+The dynamic Gaussian at time $\tau$ is obtained by applying a time-dependent 6DoF transformation to this canonical Gaussian. Therefore, instead of assigning an unrelated Gaussian to every frame, each primitive follows a continuous-time rigid motion in 3D space.
+
+\section{Real-Valued 6DoF ODE for Gaussian Transformation}
+
+Instead of modeling the Gaussian mean by a simple displacement
+\begin{equation}
+\mu_i(\tau)=\mu_i^0+x_i(\tau),
+\end{equation}
+we now model the temporal motion of Gaussian $i$ using a 6DoF rigid transformation
+\begin{equation}
+T_i(\tau) =
+\begin{bmatrix}
+Q_i(\tau) & p_i(\tau)\\
+0 & 1
+\end{bmatrix}
+\in SE(3),
+\end{equation}
+where
+\begin{itemize}[leftmargin=1.5em]
+\item $Q_i(\tau)\in SO(3)$ is the time-dependent rotation,
+\item $p_i(\tau)\in\mathbb{R}^3$ is the time-dependent translation.
+\end{itemize}
+
+The canonical Gaussian is transformed by this 6DoF pose. Therefore, the mean becomes
+\begin{equation}
+\mu_i(\tau) = Q_i(\tau)\mu_i^0+p_i(\tau).
+\end{equation}
+
+The covariance is transformed by the rotational part of the same 6DoF transformation:
+\begin{equation}
+\Sigma_i(\tau) = Q_i(\tau)\Sigma_i^0 Q_i(\tau)^\top.
+\end{equation}
+
+Thus, the Gaussian primitive is no longer only shifted in 3D space. Its center is translated, and its anisotropic shape is also rotated consistently by the same rigid transformation.
+
+\section{Translation Evolution}
+
+The translational component of the 6DoF transformation is modeled by a real-valued ODE in $\mathbb{R}^3$:
+\begin{equation}
+\frac{dp_i(\tau)}{d\tau} = A_i^p p_i(\tau)+b_i^p,
+\end{equation}
+where
+\begin{equation}
+A_i^p\in\mathbb{R}^{3\times 3},
+\qquad
+b_i^p\in\mathbb{R}^3
+\end{equation}
+are trainable parameters for Gaussian $i$.
+
+The initial condition is
+\begin{equation}
+p_i(0)=0,
+\end{equation}
+so that the canonical Gaussian is recovered at the reference time.
+
+The closed-form solution is
+\begin{equation}
+p_i(\tau) = e^{A_i^p\tau}p_i(0) + \int_0^\tau e^{A_i^p(\tau-s)}b_i^p\,ds.
+\end{equation}
+
+Since $p_i(0)=0$, this becomes
+\begin{equation}
+p_i(\tau) = \int_0^\tau e^{A_i^p(\tau-s)}b_i^p\,ds.
+\end{equation}
+
+If $A_i^p$ is invertible, then
+\begin{equation}
+p_i(\tau) = (A_i^p)^{-1} \left( e^{A_i^p\tau}-I \right)b_i^p.
+\end{equation}
+
+When $A_i^p=0$, the translation reduces to linear motion:
+\begin{equation}
+p_i(\tau)=b_i^p\tau.
+\end{equation}
+
+Therefore, simple translational offset is a special case of the proposed 6DoF formulation.
+
+\section{Rotation Evolution}
+
+The rotational component of the 6DoF transformation is modeled as an ODE on $SO(3)$. For each Gaussian primitive, we define an angular velocity vector
+\begin{equation}
+\omega_i\in\mathbb{R}^3.
+\end{equation}
+
+Let $\widehat{\omega}_i\in\mathfrak{so}(3)$ be the skew-symmetric matrix associated with $\omega_i$:
+\begin{equation}
+\widehat{\omega}_i =
+\begin{bmatrix}
+0 & -\omega_{iz} & \omega_{iy}\\
+\omega_{iz} & 0 & -\omega_{ix}\\
+-\omega_{iy} & \omega_{ix} & 0
+\end{bmatrix}.
+\end{equation}
+
+The rotation evolves according to
+\begin{equation}
+\frac{dQ_i(\tau)}{d\tau} = \widehat{\omega}_i Q_i(\tau),
+\end{equation}
+with initial condition
+\begin{equation}
+Q_i(0)=I.
+\end{equation}
+
+The closed-form solution is
+\begin{equation}
+Q_i(\tau) = \exp\left(\widehat{\omega}_i\tau\right).
+\end{equation}
+
+This guarantees that $Q_i(\tau)$ remains a valid 3D rotation matrix for all times $\tau$. Therefore, the 6DoF transformation remains a valid element of $SE(3)$ throughout training and rendering.
+
+\section{Optional Scale Evolution}
+
+The 6DoF transformation already updates the Gaussian position and orientation. If we want the Gaussian to remain strictly rigid, then the covariance is simply
+\begin{equation}
+\Sigma_i(\tau) = Q_i(\tau)\Sigma_i^0Q_i(\tau)^\top.
+\end{equation}
+
+However, for deformable dynamic scenes, we may also allow the principal scales of the Gaussian to evolve over time. To guarantee positive scales, we use a rotation-scale decomposition of the canonical covariance:
+\begin{equation}
+\Sigma_i^0 = R_i^0 \Lambda_i^0 (R_i^0)^\top,
+\end{equation}
+where
+\begin{equation}
+\Lambda_i^0 = \operatorname{diag} \left( e^{s_{i1}^0}, e^{s_{i2}^0}, e^{s_{i3}^0} \right).
+\end{equation}
+
+The logarithmic scale variables evolve as
+\begin{equation}
+\frac{d s_{ij}(\tau)}{d\tau} = \kappa_{ij},
+\qquad
+j\in\{1,2,3\}.
+\end{equation}
+
+Thus,
+\begin{equation}
+s_{ij}(\tau)=s_{ij}^0+\kappa_{ij}\tau,
+\end{equation}
+and
+\begin{equation}
+\Lambda_i(\tau) = \operatorname{diag} \left( e^{s_{i1}^0+\kappa_{i1}\tau}, e^{s_{i2}^0+\kappa_{i2}\tau}, e^{s_{i3}^0+\kappa_{i3}\tau} \right).
+\end{equation}
+
+With scale evolution, the covariance becomes
+\begin{equation}
+\Sigma_i(\tau) = Q_i(\tau) R_i^0 \Lambda_i(\tau) (R_i^0)^\top Q_i(\tau)^\top.
+\end{equation}
+
+In this version, the 6DoF rotation controls the rigid orientation of the Gaussian blob, while the optional scale ODE controls non-rigid expansion or contraction.
+
+\section{Dynamic Gaussian at Time $\tau$}
+
+At any time $\tau$, the ODE system produces the 6DoF transformation
+\begin{equation}
+T_i(\tau) = \left( Q_i(\tau),p_i(\tau) \right)
+\end{equation}
+for each Gaussian primitive.
+
+The transformed Gaussian is
+\begin{equation}
+G_i(\tau) = \left( \mu_i(\tau), \Sigma_i(\tau), \alpha_i, c_i \right),
+\end{equation}
+where
+\begin{equation}
+\mu_i(\tau) = Q_i(\tau)\mu_i^0+p_i(\tau),
+\end{equation}
+and
+\begin{equation}
+\Sigma_i(\tau) = Q_i(\tau)\Sigma_i^0Q_i(\tau)^\top
+\end{equation}
+for rigid 6DoF motion.
+
+If scale evolution is enabled, then
+\begin{equation}
+\Sigma_i(\tau) = Q_i(\tau) R_i^0 \Lambda_i(\tau) (R_i^0)^\top Q_i(\tau)^\top.
+\end{equation}
+
+Therefore, the dynamic Gaussian set is
+\begin{equation}
+\mathcal{G}_{\tau} = \left\{ \bigl(\mu_i(\tau),\Sigma_i(\tau),\alpha_i,c_i\bigr) \right\}_{i=1}^N.
+\end{equation}
+
+The temporal variation of the scene now comes from the ODE-controlled 6DoF transformations of the Gaussian primitives.
+
+\section{Standard 3DGS Rendering}
+
+The dynamic Gaussian set at time $\tau$ is rendered using the original 3D Gaussian Splatting pipeline. Each 3D Gaussian is projected into the camera image plane, producing a 2D Gaussian footprint with projected mean and covariance
+\begin{equation}
+\mu_i'(\tau)\in\mathbb{R}^2,
+\qquad
+\Sigma_i'(\tau)\in\mathbb{R}^{2\times 2}.
+\end{equation}
+
+For a pixel coordinate $x\in\mathbb{R}^2$, the screen-space contribution of Gaussian $i$ is
+\begin{equation}
+g_i(x,\tau) = \exp \left( -\frac{1}{2} (x-\mu_i'(\tau))^\top \Sigma_i'(\tau)^{-1} (x-\mu_i'(\tau)) \right).
+\end{equation}
+
+As in standard 3DGS, projected Gaussians are depth-sorted and alpha-composited. If $\pi(x)$ denotes the ordered set of relevant Gaussians for pixel $x$, the rendered color is
+\begin{equation}
+C(x,\tau) = \sum_{i\in\pi(x)} T_i^{\text{alpha}}(x,\tau) \alpha_i(x,\tau) c_i,
+\end{equation}
+where
+\begin{equation}
+\alpha_i(x,\tau) = \alpha_i g_i(x,\tau),
+\end{equation}
+and
+\begin{equation}
+T_i^{\text{alpha}}(x,\tau) = \prod_{j<i} \left( 1-\alpha_j(x,\tau) \right).
+\end{equation}
+
+The rendering backbone is identical to the original 3DGS formulation. The only change is the way $\mu_i(\tau)$ and $\Sigma_i(\tau)$ are generated over time: they now come from a 6DoF transformation rather than a simple offset.
+
+\section{Training Objective}
+
+The model is trained end-to-end from dynamic image sequences. For each observed image $I_t$ at time $t$, we convert the timestamp to $\tau$, solve the explicit ODEs to obtain the 6DoF Gaussian transformations at that time, render the image $\hat I_t$, and optimize
+\begin{equation}
+\mathcal{L} = \mathcal{L}_{\text{rec}} + \lambda_f \mathcal{L}_{\text{flow}} + \lambda_r \mathcal{L}_{\text{ode}}.
+\end{equation}
+
+\subsection{Reconstruction Loss}
+
+The reconstruction term combines pixelwise fidelity and structural similarity:
+\begin{equation}
+\mathcal{L}_{\text{rec}} = \sum_t |\hat I_t-I_t|_1 + \lambda_s \sum_t \left( 1-\operatorname{SSIM}(\hat I_t,I_t) \right).
+\end{equation}
+
+\subsection{Optical Flow Consistency Loss}
+
+To encourage temporally coherent motion, we compare the optical flow between consecutive rendered frames and the optical flow between consecutive ground-truth frames:
+\begin{equation}
+\mathcal{L}_{\text{flow}} = \sum_t \left| \hat F_{t\to t+1} - F_{t\to t+1} \right|_1.
+\end{equation}
+
+Here, $F_{t\to t+1}$ denotes the optical flow estimated from the ground-truth images $I_t$ and $I_{t+1}$, while $\hat F_{t\to t+1}$ denotes the optical flow estimated from the rendered images $\hat I_t$ and $\hat I_{t+1}$.
+
+\subsection{6DoF ODE Regularization}
+
+To prevent unstable transformations, we regularize both the translational and rotational parts of the 6DoF motion:
+\begin{equation}
+\mathcal{L}_{\text{ode}} = \mathcal{L}_{\text{trans}} + \lambda_{\omega}\mathcal{L}_{\text{rot}} + \lambda_s\mathcal{L}_{\text{scale}}.
+\end{equation}
+
+The translation regularizer penalizes excessive Gaussian velocity:
+\begin{equation}
+\mathcal{L}_{\text{trans}} = \sum_i \int \left| \frac{d p_i(\tau)}{d\tau} \right|_2^2 d\tau.
+\end{equation}
+
+Using the translation ODE, this becomes
+\begin{equation}
+\mathcal{L}_{\text{trans}} = \sum_i \int \left| A_i^p p_i(\tau)+b_i^p \right|_2^2 d\tau.
+\end{equation}
+
+The rotation regularizer penalizes excessive angular velocity:
+\begin{equation}
+\mathcal{L}_{\text{rot}} = \sum_i \left| \omega_i \right|_2^2.
+\end{equation}
+
+If scale evolution is enabled, the scale regularizer is
+\begin{equation}
+\mathcal{L}_{\text{scale}} = \sum_i \int \sum_{j=1}^3 \left[ \left( \frac{d s_{ij}(\tau)}{d\tau} \right)^2 + \beta |s_{ij}(\tau)| \right] d\tau.
+\end{equation}
+
+Since
+\begin{equation}
+\frac{d s_{ij}(\tau)}{d\tau} = \kappa_{ij},
+\end{equation}
+this penalizes excessive scale growth or shrinkage.
+
+\section{Training Procedure}
+
+For a training frame at time $\tau$, we begin from the canonical Gaussian state at $\tau=0$. For each Gaussian primitive, we solve the ODEs that define its 6DoF transformation:
+\begin{equation}
+Q_i(\tau),
+\qquad
+p_i(\tau).
+\end{equation}
+
+The canonical Gaussian is then transformed as
+\begin{equation}
+\mu_i(\tau) = Q_i(\tau)\mu_i^0+p_i(\tau),
+\end{equation}
+and
+\begin{equation}
+\Sigma_i(\tau) = Q_i(\tau)\Sigma_i^0Q_i(\tau)^\top.
+\end{equation}
+
+These transformed Gaussian parameters are passed directly into the original 3DGS renderer.
+
+The reconstruction and temporal consistency losses backpropagate through the renderer and through the ODE-defined 6DoF transformations. Therefore, training updates both the canonical Gaussian parameters and the ODE parameters controlling translation, rotation, and optional scale evolution.
+
+\section{Evaluation Protocol}
+
+Since the main objective of this work is to evaluate whether explicit ODE-based 6DoF Gaussian transformation improves deformable motion modeling, evaluation should not rely only on conventional framewise image metrics. We therefore use two types of evaluation.
+
+\subsection{Framewise Rendering Metrics}
+
+As standard rendering-quality measures, we report image-based metrics such as PSNR, SSIM, and LPIPS between rendered frames and ground-truth frames. These measure per-frame reconstruction fidelity.
+
+\subsection{Motion-Oriented Evaluation and Visualization}
+
+To better analyze deformable motion behavior over time, we additionally use optical-flow-based and trajectory-based observations.
+
+First, we measure optical flow error by comparing the optical flow estimated from consecutive rendered frames with the optical flow estimated from consecutive ground-truth frames. This provides a motion-oriented metric for whether the rendered temporal evolution matches the true image-space motion.
+
+Second, we analyze the learned 6DoF trajectories themselves. In particular, we can visualize Gaussian translation trajectories, rotation magnitude, angular velocity, and temporal jitter heatmaps over time.
+
+Therefore, optical flow error and trajectory smoothness are used not only as evaluation criteria but also as visualization tools for understanding how well the temporal model captures deformable motion.
+
+\section{Comparison Setting and Baselines}
+
+The framework is designed to evaluate temporal modeling strategies under a fixed rendering backbone. Since rendering is always performed by the original 3DGS pipeline, differences in performance arise only from how Gaussian geometry evolves over time.
+
+The main methods to compare are:
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{ODE-based 6DoF transformation:} each Gaussian is transformed by an explicit real-valued ODE-controlled 6DoF pose in $SE(3)$.
+\item \textbf{Offset-only ODE:} each Gaussian mean evolves by a 3D offset, while orientation is not directly controlled by the same motion model.
+\item \textbf{Linear approximation:} Gaussian motion is modeled as a linear function of time.
+\item \textbf{Deformation network:} Gaussian parameters are updated by a learned deformation module.
+\item \textbf{Framewise optimization baseline:} Gaussian parameters are optimized independently or only weakly coupled across frames.
+\end{itemize}
+
+This setup directly evaluates whether explicit real-valued ODE-based 6DoF temporal transformation can track deformable motion more effectively than offset-only motion or neural deformation fields.
+
+\section{Discussion}
+
+The proposed method intentionally keeps the original 3DGS formulation intact. The scene is still represented by explicit 3D Gaussians, and rendering is still performed by projection, splatting, and alpha compositing. The contribution lies only in the temporal parameterization of Gaussian geometry.
+
+The key change is that temporal motion is no longer represented as a simple offset of the Gaussian center. Instead, each Gaussian is controlled by a 6DoF transformation consisting of translation and rotation. This allows the framework to model not only where a Gaussian moves, but also how its local anisotropic shape rotates over time.
+
+This is especially important for dynamic 3DGS because many scene elements undergo local rigid or near-rigid motion. A cup, hand, bottle, or moving object part may not only translate across space but also rotate. Offset-only deformation cannot represent this local rotation naturally. In contrast, a 6DoF formulation directly captures this behavior by transforming the entire Gaussian primitive.
+
+Because no warp field or implicit neural deformation is inserted into the renderer, the experiments offer a clean test of whether explicit real-valued ODE-controlled 6DoF transformations are sufficient to improve deformable motion tracking in dynamic 3DGS.
+
+\section{Conclusion}
+
+We presented a dynamic 3D Gaussian Splatting framework in which the original 3DGS renderer is preserved and only the temporal evolution of Gaussian geometry is changed. Instead of updating each Gaussian by a simple 3D offset, the proposed formulation applies a time-dependent 6DoF transformation to each canonical Gaussian primitive. The translation and rotation are generated by explicit real-valued ODEs, allowing each Gaussian to move and rotate continuously over time.
+
+This creates a more expressive and geometrically meaningful formulation for dynamic Gaussian motion. The model remains fully compatible with the standard 3DGS rendering pipeline while allowing each Gaussian primitive to follow a continuous-time 6DoF trajectory in 3D space.
+
+\end{document}
