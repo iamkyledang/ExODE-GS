@@ -423,6 +423,37 @@ class GaussianModel:
 
         return d_xyz, d_rotation, d_scaling
 
+    def compute_ode_deformation_chunk(self, c_start, c_end, tau, is_6dof=False):
+        """
+        Like compute_ode_deformation but operates only on Gaussians [c_start:c_end].
+        Reduces peak memory from matrix_exp temporaries when processing in chunks.
+
+        tau: (chunk_size, 1)
+        """
+        n = c_end - c_start
+        tau = tau.view(n, 1)
+
+        A = self._ode_A[c_start:c_end]
+        b = self._ode_b[c_start:c_end]
+        omega = self._ode_omega[c_start:c_end]
+        kappa = self._ode_kappa[c_start:c_end]
+
+        p = compute_translation_from_affine_ode(A, b, tau)
+        Q = compute_rotation_from_omega(omega, tau)
+        d_scaling = kappa * tau
+
+        if is_6dof:
+            d_xyz = build_se3(Q, p)
+        else:
+            d_xyz = p
+
+        q_tau = rotation_matrix_to_quaternion(Q)
+        identity_q = q_tau.new_zeros(n, 4)
+        identity_q[:, 0] = 1.0
+        d_rotation = q_tau - identity_q
+
+        return d_xyz, d_rotation, d_scaling
+
     # -------------------------------------------------------------------------
     # Creation and training setup.
     # -------------------------------------------------------------------------
@@ -516,7 +547,7 @@ class GaussianModel:
         # Use deform_lr if it exists; otherwise use a safe default.
         ode_lr = getattr(training_args, "ode_lr", None)
         if ode_lr is None:
-            ode_lr = getattr(training_args, "deform_lr", 1e-4)
+            ode_lr = getattr(training_args, "deform_lr",1e-4)
 
         ode_A_lr = getattr(training_args, "ode_A_lr", ode_lr)
         ode_b_lr = getattr(training_args, "ode_b_lr", ode_lr)

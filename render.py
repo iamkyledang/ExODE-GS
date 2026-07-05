@@ -12,6 +12,10 @@
 import torch
 from scene import Scene, GaussianModel
 import os
+# os.environ.setdefault(
+#     "PYTORCH_CUDA_ALLOC_CONF",
+#     "max_split_size_mb:512,garbage_collection_threshold:0.8"
+# )
 from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
@@ -22,8 +26,30 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 # from gaussian_renderer import GaussianModel
 import imageio
+import json
 import numpy as np
 import time
+
+
+# _ODE_CHUNK_SIZE = 100_000
+#
+#
+# @torch.no_grad()
+# def _ode_chunked(gaussians, time_input, is_6dof):
+#     """Run compute_ode_deformation in chunks to cap peak VRAM from matrix_exp."""
+#     N = gaussians.get_xyz.shape[0]
+#     if N <= _ODE_CHUNK_SIZE:
+#         return gaussians.compute_ode_deformation(time_input, is_6dof=is_6dof)
+#     d_xyz_list, d_rot_list, d_scl_list = [], [], []
+#     for c_start in range(0, N, _ODE_CHUNK_SIZE):
+#         c_end = min(c_start + _ODE_CHUNK_SIZE, N)
+#         dx, dr, ds = gaussians.compute_ode_deformation_chunk(
+#             c_start, c_end, time_input[c_start:c_end], is_6dof=is_6dof
+#         )
+#         d_xyz_list.append(dx)
+#         d_rot_list.append(dr)
+#         d_scl_list.append(ds)
+#     return torch.cat(d_xyz_list, dim=0), torch.cat(d_rot_list, dim=0), torch.cat(d_scl_list, dim=0)
 
 
 def render_set(model_path, load2gpu_on_the_fly, is_6dof, name, iteration, views, gaussians, pipeline, background):
@@ -43,7 +69,7 @@ def render_set(model_path, load2gpu_on_the_fly, is_6dof, name, iteration, views,
             view.load2device()
         fid = view.fid
         xyz = gaussians.get_xyz
-        time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1)
+        time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1).to(xyz.device)
         d_xyz, d_rotation, d_scaling = gaussians.compute_ode_deformation(time_input, is_6dof=is_6dof)
         results = render(view, gaussians, pipeline, background, d_xyz, d_rotation, d_scaling, is_6dof)
         rendering = results["render"]
@@ -54,11 +80,17 @@ def render_set(model_path, load2gpu_on_the_fly, is_6dof, name, iteration, views,
         torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
         torchvision.utils.save_image(depth, os.path.join(depth_path, '{0:05d}'.format(idx) + ".png"))
+        if load2gpu_on_the_fly:
+            view.load2device('cpu')
+        if idx % 50 == 0:
+            torch.cuda.empty_cache()
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
+        if load2gpu_on_the_fly:
+            view.load2device()
         fid = view.fid
         xyz = gaussians.get_xyz
-        time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1)
+        time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1).to(xyz.device)
 
         torch.cuda.synchronize()
         t_start = time.time()
@@ -69,11 +101,24 @@ def render_set(model_path, load2gpu_on_the_fly, is_6dof, name, iteration, views,
         torch.cuda.synchronize()
         t_end = time.time()
         t_list.append(t_end - t_start)
+        if load2gpu_on_the_fly:
+            view.load2device('cpu')
 
     t = np.array(t_list[5:])
     if len(t) > 0:
         fps = 1.0 / t.mean()
         print(f'Test FPS: \033[1;35m{fps:.5f}\033[0m, Num. of GS: {xyz.shape[0]}')
+        _results_path = os.path.join(model_path, "results.json")
+        _existing = {}
+        if os.path.exists(_results_path):
+            with open(_results_path) as _f:
+                _existing = json.load(_f)
+        _method_key = "ours_{}".format(iteration)
+        if not isinstance(_existing.get(_method_key), dict):
+            _existing[_method_key] = {}
+        _existing[_method_key].update({"fps": float(fps), "num_gaussians": int(xyz.shape[0])})
+        with open(_results_path, "w") as _f:
+            json.dump(_existing, _f, indent=True)
 
 
 def interpolate_time(model_path, load2gpu_on_the_fly, is_6dof, name, iteration, views, gaussians, pipeline, background):

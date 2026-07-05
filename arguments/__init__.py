@@ -96,6 +96,11 @@ class OptimizationParams(ParamGroup):
         self.densify_from_iter = 500
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0007
+        self.ode_lr     = 1e-4   # fallback used if per-param lr is missing
+        self.ode_A_lr   = 1e-5   # smallest: A enters matrix_exp nonlinearly — amplifies fast
+        self.ode_b_lr   = 1e-4   # translation drift: linear in augmented exp, safe at 1e-4
+        self.ode_omega_lr = 1e-4 # angular velocity: feeds Rodrigues, comparable to rotation_lr/10
+        self.ode_kappa_lr = 5e-4 # log-scale rate: d_scale = kappa*tau — fully linear, can be highest
         super().__init__(parser, "Optimization Parameters")
 
 

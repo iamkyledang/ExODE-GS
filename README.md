@@ -1,213 +1,79 @@
-# Deformable 3D Gaussians for High-Fidelity Monocular Dynamic Scene Reconstruction
+# ExODE-GS: Explicit ODE-Guided Motion Modeling for Dynamic 3D Gaussian Splatting
 
-## [Project page](https://ingra14m.github.io/Deformable-Gaussians/) | [Paper](https://arxiv.org/abs/2309.13101)
+[Paper](https://github.com/iamkyledang/ExODE-GS) | [Code](https://github.com/iamkyledang/ExODE-GS)
 
-![Teaser image](assets/teaser.png)
+<table>
+  <tr>
+    <td><img src="gaussians_trajectories_1.png" width="100%"></td>
+    <td><img src="gaussians_trajectories_2.png" width="100%"></td>
+  </tr>
+</table>
 
-This repository contains the official implementation associated with the paper "Deformable 3D Gaussians for High-Fidelity Monocular Dynamic Scene Reconstruction".
+**Gaussian trajectory comparison on the NeRF-DS `as_novel_view` scene.** The left image is produced from the neural ODE baseline where Gaussian primitives are difficult to trace the change of motion over time. In contrast, ExODE-GS on the right reveals a clearer purple-to-yellow evolution of the Gaussian blobs. This explicit visualization makes it easier to observe how individual primitives move over time in order to analyze the motion of objects in the scene.
 
+---
 
+Reconstructing dynamic 3D scenes requires a motion model that is both expressive and understandable. We propose **ExODE-GS**, an explicit ODE-guided framework in which each Gaussian is assigned a compact set of parameters that defines its continuous-time local motion. This design preserves the efficient rendering pipeline of 3DGS while making the learned dynamics easier to inspect. ExODE-GS is evaluated on HyperNeRF, D-NeRF, and NeRF-DS datasets against deformation-MLP, HexPlane MLP, Fourier temporal basis, and neural ODE baselines.
 
-## News
+## Environment
 
-- **[5/26/2024]** [Lightweight-Deformable-GS](https://github.com/ingra14m/Lightweight-Deformable-GS) has been integrated into this repo. For the original version aligned with paper, please check the [paper](https://github.com/ingra14m/Deformable-3D-Gaussians/tree/paper) branch.
-- **[5/24/2024]** An optimized version [Lightweight-Deformable-GS](https://github.com/ingra14m/Lightweight-Deformable-GS) has been released. It offers 50% reduced storage, 200% increased FPS, and no decrease in rendering metrics.
-- **[2/27/2024]** Deformable-GS is accepted by CVPR 2024. Our another work, [SC-GS](https://yihua7.github.io/SC-GS-web/) (with higher quality, less points and faster FPS than vanilla 3D-GS), is also accepted. See you in Seattle.
-- **[11/16/2023]** Full code and real-time viewer released.
-- **[11/4/2023]** update the computation of LPIPS in metrics.py. Previously, the `lpipsPyTorch` was unable to execute on CUDA, prompting us to switch to the `lpips` library (~20x faster).
-- **[10/25/2023]** update **real-time viewer** on project page. Many, many thanks to @[yihua7](https://github.com/yihua7) for implementing the real-time viewer adapted for Deformable-GS. Also, thanks to @[ashawkey](https://github.com/ashawkey) for releasing the original GUI.
+```bash
+git clone https://github.com/iamkyledang/ExODE-GS
+cd ExODE-GS
+git submodule update --init --recursive
 
+conda create -n exode_gs python=3.7
+conda activate exode_gs
 
-
-## Dataset
-
-In our paper, we use:
-
-- synthetic dataset from [D-NeRF](https://www.albertpumarola.com/research/D-NeRF/index.html).
-- real-world dataset from [NeRF-DS](https://jokeryan.github.io/projects/nerf-ds/) and [Hyper-NeRF](https://hypernerf.github.io/).
-- The dataset in the supplementary materials comes from [DeVRF](https://jia-wei-liu.github.io/DeVRF/).
-
-We organize the datasets as follows:
-
-```shell
-├── data
-│   | D-NeRF 
-│     ├── hook
-│     ├── standup 
-│     ├── ...
-│   | NeRF-DS
-│     ├── as
-│     ├── basin
-│     ├── ...
-│   | HyperNeRF
-│     ├── interp
-│     ├── misc
-│     ├── vrig
-```
-
-> I have identified an **inconsistency in the D-NeRF's Lego dataset**. Specifically, the scenes corresponding to the training set differ from those in the test set. This discrepancy can be verified by observing the angle of the flipped Lego shovel. To meaningfully evaluate the performance of our method on this dataset, I recommend using the **validation set of the Lego dataset** as the test set. See more in [D-NeRF dataset used in Deformable-GS](https://github.com/ingra14m/Deformable-3D-Gaussians/releases/tag/v0.1-pre-released)
-
-
-
-## Pipeline
-
-![Teaser image](assets/pipeline.png)
-
-
-
-## Run
-
-### Environment
-
-```shell
-git clone https://github.com/ingra14m/Deformable-3D-Gaussians --recursive
-cd Deformable-3D-Gaussians
-
-conda create -n deformable_gaussian_env python=3.7
-conda activate deformable_gaussian_env
-
-# install pytorch
-pip install torch==1.13.1+cu116 torchvision==0.14.1+cu116 --extra-index-url https://download.pytorch.org/whl/cu116
-
-# install dependencies
 pip install -r requirements.txt
+pip install -e submodules/depth-diff-gaussian-rasterization
+pip install -e submodules/simple-knn
 ```
 
+## Datasets
 
+We evaluate on three benchmarks:
 
-### Train
+- **D-NeRF** (synthetic) — [download](https://www.albertpumarola.com/research/D-NeRF/index.html)
+- **NeRF-DS** (real-world dynamic with specular objects) — [download](https://jokeryan.github.io/projects/nerf-ds/)
+- **HyperNeRF** (real-world non-rigid) — [download](https://hypernerf.github.io/)
 
-**D-NeRF:**
+Organize data as:
 
-```shell
-python train.py -s path/to/your/d-nerf/dataset -m output/exp-name --eval --is_blender
+```
+data/
+├── D-NeRF/
+│   ├── bouncingballs/
+│   ├── lego/
+│   └── ...
+├── NeRF-DS/
+│   ├── as_novel_view/
+│   └── ...
+└── HyperNeRF/
+    ├── interp_chickchicken/
+    └── ...
 ```
 
-**NeRF-DS/HyperNeRF:**
+## Usage
 
-```shell
-python train.py -s path/to/your/real-world/dataset -m output/exp-name --eval --iterations 20000
-```
+**Train:**
 
-**6DoF Transformation:**
-
-We have also implemented the 6DoF transformation of 3D-GS, which may lead to an improvement in metrics but will reduce the speed of training and inference.
-
-```shell
+```bash
 # D-NeRF
-python train.py -s path/to/your/d-nerf/dataset -m output/exp-name --eval --is_blender --is_6dof
+python train.py -s data/D-NeRF/bouncingballs -m output/bouncingballs --eval --is_blender
 
-# NeRF-DS & HyperNeRF
-python train.py -s path/to/your/real-world/dataset -m output/exp-name --eval --is_6dof --iterations 20000
+# NeRF-DS / HyperNeRF
+python train.py -s data/NeRF-DS/as_novel_view -m output/as_novel_view --eval
 ```
 
-You can also **train with the GUI:**
+**Render:**
 
-```shell
-python train_gui.py -s path/to/your/dataset -m output/exp-name --eval --is_blender
+```bash
+python render.py -m output/as_novel_view --mode render
 ```
 
-- click `start` to start training, and click `stop` to stop training.
-- The GUI viewer is still under development, many buttons do not have corresponding functions currently. We plan to :
-  - [ ] reload checkpoints from the pre-trained model.
-  - [ ] Complete the functions of the other vacant buttons in the GUI.
+**Evaluate:**
 
-
-
-### Render & Evaluation
-
-```shell
-python render.py -m output/exp-name --mode render
-python metrics.py -m output/exp-name
+```bash
+python metrics.py -m output/as_novel_view
 ```
-
-We provide several modes for rendering:
-
-- `render`: render all the test images
-- `time`: time interpolation tasks for D-NeRF dataset
-- `all`: time and view synthesis tasks for D-NeRF dataset
-- `view`: view synthesis tasks for D-NeRF dataset
-- `original`: time and view synthesis tasks for real-world dataset
-
-
-
-## Results
-
-### D-NeRF Dataset
-
-**Quantitative Results**
-
-<img src="assets/results/D-NeRF/Quantitative.jpg" alt="Image1" style="zoom:50%;" />
-
-**Qualitative Results**
-
- <img src="assets/results/D-NeRF/bouncing.gif" alt="Image1" style="zoom:25%;" />  <img src="assets/results/D-NeRF/hell.gif" alt="Image1" style="zoom:25%;" />  <img src="assets/results/D-NeRF/hook.gif" alt="Image3" style="zoom:25%;" />  <img src="assets/results/D-NeRF/jump.gif" alt="Image4" style="zoom:25%;" /> 
-
- <img src="assets/results/D-NeRF/lego.gif" alt="Image5" style="zoom:25%;" />  <img src="assets/results/D-NeRF/mutant.gif" alt="Image6" style="zoom:25%;" />  <img src="assets/results/D-NeRF/stand.gif" alt="Image7" style="zoom:25%;" />  <img src="assets/results/D-NeRF/trex.gif" alt="Image8" style="zoom:25%;" /> 
-
-**400x400 Resolution**
-
-|          | PSNR  | SSIM   | LPIPS (VGG) | FPS  | Mem   | Num. (k) |
-| -------- | ----- | ------ | ----------- | ---- | ----- | -------- |
-| bouncing | 41.46 | 0.9958 | 0.0046      | 112  | 13.16 | 55622    |
-| hell     | 42.11 | 0.9885 | 0.0153      | 375  | 3.72  | 15733    |
-| hook     | 37.77 | 0.9897 | 0.0103      | 128  | 11.74 | 49613    |
-| jump     | 39.10 | 0.9930 | 0.0090      | 217  | 6.81  | 28808    |
-| mutant   | 43.73 | 0.9969 | 0.0029      | 124  | 11.45 | 48423    |
-| standup  | 45.38 | 0.9967 | 0.0032      | 210  | 5.94  | 25102    |
-| trex     | 38.40 | 0.9959 | 0.0041      | 85   | 18.6  | 78624    |
-| Average  | 41.14 | 0.9938 | 0.0070      | 179  | 10.20 | 43132    |
-
-### NeRF-DS Dataset
-
-<img src="assets/results/NeRF-DS/Quantitative.jpg" alt="Image1" style="zoom:50%;" />
-
-See more visualization on our [project page](https://ingra14m.github.io/Deformable-Gaussians/).
-
-
-
-### HyperNeRF Dataset
-
-Since the **camera pose** in HyperNeRF is less precise compared to NeRF-DS, we use HyperNeRF as a reference for partial visualization and the display of Failure Cases, but do not include it in the calculation of quantitative metrics. The results of the HyperNeRF dataset can be viewed on the [project page](https://ingra14m.github.io/Deformable-Gaussians/).
-
-
-
-### Real-Time Viewer
-
-https://github.com/ingra14m/Deformable-3D-Gaussians/assets/63096187/ec26d0b9-c126-4e23-b773-dcedcf386f36
-
-
-
-## Acknowledgments
-
-We sincerely thank the authors of [3D-GS](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/), [D-NeRF](https://www.albertpumarola.com/research/D-NeRF/index.html), [HyperNeRF](https://hypernerf.github.io/), [NeRF-DS](https://jokeryan.github.io/projects/nerf-ds/), and [DeVRF](https://jia-wei-liu.github.io/DeVRF/), whose codes and datasets were used in our work. We thank [Zihao Wang](https://github.com/Alen-Wong) for the debugging in the early stage, preventing this work from sinking. We also thank the reviewers and AC for not being influenced by PR, and fairly evaluating our work. This work was mainly supported by ByteDance MMLab.
-
-
-
-
-## BibTex
-
-```
-@article{yang2023deformable3dgs,
-    title={Deformable 3D Gaussians for High-Fidelity Monocular Dynamic Scene Reconstruction},
-    author={Yang, Ziyi and Gao, Xinyu and Zhou, Wen and Jiao, Shaohui and Zhang, Yuqing and Jin, Xiaogang},
-    journal={arXiv preprint arXiv:2309.13101},
-    year={2023}
-}
-```
-
-And thanks to the authors of [3D Gaussians](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) for their excellent code, please consider also cite this repository:
-
-```
-@Article{kerbl3Dgaussians,
-      author       = {Kerbl, Bernhard and Kopanas, Georgios and Leimk{\"u}hler, Thomas and Drettakis, George},
-      title        = {3D Gaussian Splatting for Real-Time Radiance Field Rendering},
-      journal      = {ACM Transactions on Graphics},
-      number       = {4},
-      volume       = {42},
-      month        = {July},
-      year         = {2023},
-      url          = {https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/}
-}
-```
-

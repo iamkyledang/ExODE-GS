@@ -10,8 +10,14 @@
 #
 
 import os
+# os.environ.setdefault(
+#     "PYTORCH_CUDA_ALLOC_CONF",
+#     "max_split_size_mb:512,garbage_collection_threshold:0.8"
+# )
 import sys
 import uuid
+import time
+import json
 import torch
 
 from random import randint
@@ -25,6 +31,28 @@ from utils.general_utils import safe_state, get_linear_noise_func
 from gaussian_renderer import render, network_gui
 from scene import Scene, GaussianModel
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+# Chunk size for compute_ode_deformation during training.
+# Reduces peak memory from matrix_exp temporaries (O(N×4×4) intermediates).
+_ODE_CHUNK_SIZE = 100_000
+
+
+def _ode_chunked(gaussians, time_input, is_6dof):
+    """Run compute_ode_deformation in chunks to cap peak VRAM from matrix_exp."""
+    N = gaussians.get_xyz.shape[0]
+    if N <= _ODE_CHUNK_SIZE:
+        return gaussians.compute_ode_deformation(time_input, is_6dof=is_6dof)
+    d_xyz_list, d_rot_list, d_scl_list = [], [], []
+    for c_start in range(0, N, _ODE_CHUNK_SIZE):
+        c_end = min(c_start + _ODE_CHUNK_SIZE, N)
+        tau_c = time_input[c_start:c_end]
+        dx, dr, ds = gaussians.compute_ode_deformation_chunk(
+            c_start, c_end, tau_c, is_6dof=is_6dof
+        )
+        d_xyz_list.append(dx)
+        d_rot_list.append(dr)
+        d_scl_list.append(ds)
+    return torch.cat(d_xyz_list, dim=0), torch.cat(d_rot_list, dim=0), torch.cat(d_scl_list, dim=0)
 
 
 try:
@@ -69,6 +97,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations):
     best_iteration = 0
 
     progress_bar = tqdm(range(opt.iterations), desc="Training progress")
+
+    _train_start_time = time.time()
+    _gaussian_count_samples = []
+    _gpu_usage_samples = []
 
     smooth_term = get_linear_noise_func(
         lr_init=0.1,
@@ -183,9 +215,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations):
                     * smooth_term(iteration)
                 )
 
-            d_xyz, d_rotation, d_scaling = gaussians.compute_ode_deformation(
-                time_input + ast_noise,
-                is_6dof=dataset.is_6dof,
+            # d_xyz, d_rotation, d_scaling = gaussians.compute_ode_deformation(
+            #     time_input + ast_noise, is_6dof=dataset.is_6dof
+            # )
+            d_xyz, d_rotation, d_scaling = _ode_chunked(
+                gaussians, time_input + ast_noise, is_6dof=dataset.is_6dof
             )
 
         # ---------------------------------------------------------------------
@@ -323,6 +357,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations):
                     gaussians.reset_opacity()
 
             # -----------------------------------------------------------------
+            # Sample stats for results.json.
+            # -----------------------------------------------------------------
+            if iteration % 100 == 0:
+                _gaussian_count_samples.append(gaussians.get_xyz.shape[0])
+                _gpu_usage_samples.append(torch.cuda.memory_allocated() / (1024 ** 3))
+
+            # -----------------------------------------------------------------
             # Optimizer step.
             #
             # Only GaussianModel optimizer exists now.
@@ -333,6 +374,30 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations):
                 gaussians.optimizer.step()
                 gaussians.update_learning_rate(iteration)
                 gaussians.optimizer.zero_grad(set_to_none=True)
+
+    _training_time_seconds = time.time() - _train_start_time
+    _avg_num_gaussians = (
+        int(sum(_gaussian_count_samples) / len(_gaussian_count_samples))
+        if _gaussian_count_samples
+        else int(gaussians.get_xyz.shape[0])
+    )
+    _avg_gpu_gb = (
+        sum(_gpu_usage_samples) / len(_gpu_usage_samples)
+        if _gpu_usage_samples
+        else 0.0
+    )
+    _results_path = os.path.join(dataset.model_path, "results.json")
+    _existing = {}
+    if os.path.exists(_results_path):
+        with open(_results_path) as _f:
+            _existing = json.load(_f)
+    _existing.update({
+        "training_time_seconds": _training_time_seconds,
+        "avg_num_gaussians": _avg_num_gaussians,
+        "avg_gpu_usage_gb": _avg_gpu_gb,
+    })
+    with open(_results_path, "w") as _f:
+        json.dump(_existing, _f, indent=True)
 
     print(f"Best PSNR = {best_psnr} in Iteration {best_iteration}")
 
@@ -397,7 +462,7 @@ def training_report(
         validation_configs = (
             {
                 "name": "test",
-                "cameras": scene.getTestCameras(),
+                "cameras": scene.getTestCameras()[:5],
             },
             {
                 "name": "train",
@@ -421,11 +486,14 @@ def training_report(
                     xyz = scene.gaussians.get_xyz
                     time_input = fid.unsqueeze(0).expand(xyz.shape[0], -1)
 
-                    d_xyz, d_rotation, d_scaling = (
-                        scene.gaussians.compute_ode_deformation(
-                            time_input,
-                            is_6dof=is_6dof,
-                        )
+                    # d_xyz, d_rotation, d_scaling = (
+                    #     scene.gaussians.compute_ode_deformation(
+                    #         time_input,
+                    #         is_6dof=is_6dof,
+                    #     )
+                    # )
+                    d_xyz, d_rotation, d_scaling = _ode_chunked(
+                        scene.gaussians, time_input, is_6dof=is_6dof
                     )
 
                     image = torch.clamp(
