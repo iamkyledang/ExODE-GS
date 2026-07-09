@@ -9,7 +9,7 @@
   </tr>
 </table>
 
-**Gaussian trajectory comparison on the NeRF-DS `as_novel_view` scene.** Left: neural ODE baseline. Right: ExODE-GS — individual Gaussian blobs trace clear purple-to-yellow motion paths over time.
+**Gaussian trajectory comparison on the NeRF-DS `as_novel_view` scene.** The left image is produced from the neural ODE baseline where Gaussian primitives are difficult to trace the change of motion over time. In contrast, ExODE-GS on the right reveals a clearer purple-to-yellow evolution of the Gaussian blobs. This explicit visualization makes it easier to observe how individual primitives move over time in order to analyze the motion of objects in the scene.
 
 ---
 
@@ -76,7 +76,9 @@ python render.py -m output/as_novel_view --mode render
 python metrics.py -m output/as_novel_view
 ```
 
-**Visualise Gaussian trajectories and motion heatmaps:**
+**Visualisation**
+
+Renders per-Gaussian motion heatmaps and trajectory plots for each scene across all ablation variants.
 
 ```bash
 # NeRF-DS ablation
@@ -88,7 +90,6 @@ python visual_ablation_dnerf.py
 # Optional flags
 #   --variants full no_A no_b no_omega no_kappa
 #   --scenes <scene_name> ...
-#   --top_k 300 --t_steps 20
 ```
 
 Outputs are saved to `ablation_nerf_ds_visual/` and `ablation_dnerf_visual/`.
