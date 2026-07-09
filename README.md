@@ -1,6 +1,6 @@
 # ExODE-GS: Explicit ODE-Guided Motion Modeling for Dynamic 3D Gaussian Splatting
 
-[Paper](https://github.com/iamkyledang/ExODE-GS) | [Code](https://github.com/iamkyledang/ExODE-GS)
+[Paper](https://drive.google.com/file/d/1s2RIR4s5N8dq9S9Ok1aJq4Br3TFxrJkv/view?usp=sharing) | [Code](https://github.com/iamkyledang/ExODE-GS)
 
 <table>
   <tr>
@@ -32,9 +32,9 @@ pip install -e submodules/simple-knn
 
 We evaluate on three benchmarks:
 
-- **D-NeRF** (synthetic) — [download](https://www.albertpumarola.com/research/D-NeRF/index.html)
-- **NeRF-DS** (real-world dynamic with specular objects) — [download](https://jokeryan.github.io/projects/nerf-ds/)
-- **HyperNeRF** (real-world non-rigid) — [download](https://hypernerf.github.io/)
+- **D-NeRF** (synthetic) — [Download](https://www.albertpumarola.com/research/D-NeRF/index.html)
+- **NeRF-DS** (real-world dynamic with specular objects) — [Download](https://jokeryan.github.io/projects/nerf-ds/)
+- **HyperNeRF** (real-world non-rigid) — [Download](https://hypernerf.github.io/)
 
 Organize data as:
 
